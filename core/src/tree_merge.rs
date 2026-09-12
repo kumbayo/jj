@@ -223,8 +223,7 @@ impl TreeMerger {
     }
 
     fn process_tree(&mut self, dir: RepoPathBuf, tree: Merge<Tree>) {
-        // First resolve trivial merges (those that we don't need to load any more data
-        // for)
+        // First resolve trivial merges (those that we don't need to load any more data for)
         let same_change = self.store.merge_options().same_change;
         let mut resolved = vec![];
         let mut non_trivial = vec![];

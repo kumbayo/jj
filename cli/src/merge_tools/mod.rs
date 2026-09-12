@@ -444,8 +444,7 @@ pub struct MergeEditor {
 }
 
 impl MergeEditor {
-    /// Creates 3-way merge editor of the given name, and loads parameters from
-    /// the settings.
+    /// Creates 3-way merge editor of the given name, and loads parameters from the settings.
     pub fn with_name(
         name: &str,
         settings: &UserSettings,

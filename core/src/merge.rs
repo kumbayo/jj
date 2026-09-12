@@ -121,8 +121,8 @@ pub enum SameChange {
     Accept,
 }
 
-/// Attempt to resolve trivial conflicts between the inputs. There must be
-/// an odd number of terms.
+/// Attempt to resolve trivial conflicts between the inputs.
+/// There must be an odd number of terms.
 pub fn trivial_merge<T>(values: &[T], same_change: SameChange) -> Option<&T>
 where
     T: Eq + Hash,
@@ -154,8 +154,7 @@ where
         counts.entry(value).and_modify(|e| *e += n).or_insert(n);
     }
 
-    // Collect non-zero value. Values with a count of 0 means that they have
-    // canceled out.
+    // Collect non-zero value. Values with a count of 0 means that they have canceled out.
     counts.retain(|_, count| *count != 0);
     if counts.len() == 1 {
         // If there is a single value with a count of 1 left, then that is the result.
@@ -426,8 +425,7 @@ impl<T> Merge<T> {
         self
     }
 
-    /// If this merge can be trivially resolved, returns the value it resolves
-    /// to.
+    /// If this merge can be trivially resolved, returns the value it resolves to.
     pub fn resolve_trivial(&self, same_change: SameChange) -> Option<&T>
     where
         T: Eq + Hash,

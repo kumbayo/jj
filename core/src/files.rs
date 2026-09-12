@@ -321,8 +321,7 @@ pub fn merge<T: AsRef<[u8]>>(inputs: &Merge<T>, options: &MergeOptions) -> Merge
     merge_inner(inputs, options)
 }
 
-/// Splits `inputs` into hunks, attempts to resolve trivial merge conflicts for
-/// each.
+/// Splits `inputs` into hunks, attempts to resolve trivial merge conflicts for each.
 ///
 /// If all input hunks can be merged successfully, returns the merged content.
 pub fn try_merge<T: AsRef<[u8]>>(inputs: &Merge<T>, options: &MergeOptions) -> Option<BString> {
