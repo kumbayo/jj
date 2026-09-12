@@ -626,7 +626,8 @@
                     "description": "Granularity of hunks when merging files",
                     "enum": [
                         "line",
-                        "word"
+                        "word",
+                        "file"
                     ],
                     "default": "line"
                 },

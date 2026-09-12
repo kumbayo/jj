@@ -65,8 +65,6 @@ impl MergeOptions {
     /// Loads merge options from `settings`.
     pub fn from_settings(settings: &UserSettings) -> Result<Self, ConfigGetError> {
         Ok(Self {
-            // Maybe we can add hunk-level=file to disable content merging if
-            // needed. It wouldn't be translated to FileMergeHunkLevel.
             hunk_level: settings.get("merge.hunk-level")?,
             same_change: settings.get("merge.same-change")?,
         })
