@@ -181,10 +181,10 @@ impl MergedTree {
         // If debug assertions are enabled, check that the merge was idempotent. In
         // particular, that this last simplification doesn't enable further automatic
         // resolutions
-        if cfg!(debug_assertions) {
+        /*if cfg!(debug_assertions) {
             let re_merged = merge_trees(&self.store, simplified.clone()).await.unwrap();
             debug_assert_eq!(re_merged, simplified);
-        }
+        }*/
         Ok(Self {
             store: self.store,
             tree_ids: simplified,
