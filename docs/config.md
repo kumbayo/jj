@@ -2075,6 +2075,7 @@ word-level hunks.
 
 * `line`: split into line hunks (default)
 * `word`: split into word hunks
+* `file`: do not split (This disables automatic merging of files)
 
 ```toml
 [merge]

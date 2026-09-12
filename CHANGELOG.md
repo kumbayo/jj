@@ -146,6 +146,8 @@ None
   directory or loaded via `--config-file`). This allows precise file targeting
   and avoids interactive prompts when multiple config files exist.
 
+* New config option `merge.hunk-level = "file"` to enable file-level merging.
+
 ### Fixed bugs
 
 * [The default `immutable_heads()` set](docs/config.md#set-of-immutable-commits)

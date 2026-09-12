@@ -260,6 +260,35 @@ fn test_new_merge_conflicts() {
     1b
     2c
     ");
+
+    // reset working copy
+    work_dir.run_jj(["new", "root()"]).success();
+
+    // merge whole file
+    let output = work_dir.run_jj(["new", "2|3", "--config=merge.hunk-level=file"]);
+    insta::assert_snapshot!(output, @"
+    ------- stderr -------
+    Working copy  (@) now at: kmkuslsw 0a315073 (conflict) (empty) (no description set)
+    Parent commit (@-)      : royxmykx 1b282e07 3 | 3
+    Parent commit (@-)      : zsuskuln 7ac709e5 2 | 2
+    Added 1 files, modified 0 files, removed 0 files
+    Warning: There are unresolved conflicts at these paths:
+    file    2-sided conflict
+    [EOF]
+    ");
+    insta::assert_snapshot!(work_dir.read_file("file"), @r#"
+    <<<<<<< conflict 1 of 1
+    %%%%%%% diff from: rlvkpnrz a93ed0a5 "1"
+    \\\\\\\        to: royxmykx 1b282e07 "3"
+    -1a
+    +3a 1a
+     1b
+    +++++++ zsuskuln 7ac709e5 "2"
+    1a 2a
+    1b
+    2c
+    >>>>>>> conflict 1 of 1 ends
+    "#);
 }
 
 #[test]

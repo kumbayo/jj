@@ -270,6 +270,8 @@ pub enum FileMergeHunkLevel {
     Line,
     /// Splits into word hunks.
     Word,
+    /// Does not split.
+    File,
 }
 
 /// Merge result in either fully-resolved or conflicts form, akin to
@@ -315,10 +317,16 @@ where
     // usually done for 3-way conflicts. Are there better heuristics when there are
     // more than 3 parts?
     let num_diffs = inputs.removes().len();
-    let diff = ContentDiff::by_line(inputs.removes().chain(inputs.adds()));
+    let diff = if options.hunk_level == FileMergeHunkLevel::File {
+        ContentDiff::unrefined(inputs.removes().chain(inputs.adds()))
+    } else {
+        ContentDiff::by_line(inputs.removes().chain(inputs.adds()))
+    };
     let hunks = resolve_diff_hunks(&diff, num_diffs, options.same_change);
     match options.hunk_level {
-        FileMergeHunkLevel::Line => B::from_hunks(hunks.map(MergeHunk::Borrowed)),
+        FileMergeHunkLevel::Line | FileMergeHunkLevel::File => {
+            B::from_hunks(hunks.map(MergeHunk::Borrowed))
+        }
         FileMergeHunkLevel::Word => {
             B::from_hunks(hunks.map(|h| merge_hunk_by_word(h, options.same_change)))
         }
