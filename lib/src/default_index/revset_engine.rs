@@ -1447,7 +1447,14 @@ async fn has_diff_from_parent(
     // TODO: Resolve values concurrently
     while let Some(entry) = tree_diff.next().await {
         let mut values = entry.values?;
-        values.before = resolve_file_values(store, &entry.path, values.before).await?;
+        values.before = resolve_file_values(
+            store,
+            &entry.path,
+            values.before,
+            #[cfg(feature = "git")]
+            None,
+        )
+        .await?;
         if !values.is_changed() {
             continue;
         }
@@ -1474,7 +1481,14 @@ async fn matches_diff_from_parent(
     // TODO: Resolve values concurrently
     while let Some(entry) = tree_diff.next().await {
         let mut values = entry.values?;
-        values.before = resolve_file_values(store, &entry.path, values.before).await?;
+        values.before = resolve_file_values(
+            store,
+            &entry.path,
+            values.before,
+            #[cfg(feature = "git")]
+            None,
+        )
+        .await?;
         if !values.is_changed() {
             continue;
         }
