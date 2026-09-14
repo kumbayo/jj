@@ -40,9 +40,11 @@ use crate::backend::TreeValue;
 use crate::config::ConfigGetError;
 use crate::files;
 use crate::files::FileMergeHunkLevel;
+#[cfg(feature = "git")]
+use crate::gitattributes::{GitAttributes, NoneFileLoader, SearchPriority, TreeFileLoader};
 use crate::merge::Merge;
 use crate::merge::SameChange;
-use crate::merged_tree::all_merged_tree_entries;
+use crate::merged_tree::{MergedTree, all_merged_tree_entries};
 use crate::object_id::ObjectId as _;
 use crate::repo_path::RepoPath;
 use crate::repo_path::RepoPathBuf;
@@ -51,6 +53,7 @@ use crate::settings::UserSettings;
 use crate::store::Store;
 use crate::tree::ToTreeMergeExt as _;
 use crate::tree::Tree;
+use jj_core::conflict_labels::ConflictLabels;
 
 /// Options for tree/file conflict resolution.
 #[derive(Clone, Debug)]
@@ -79,11 +82,22 @@ pub async fn merge_trees(store: &Arc<Store>, merge: Merge<TreeId>) -> BackendRes
         Err(merge) => merge,
     };
 
+    #[cfg(feature = "git")]
+    let git_attributes = {
+        let input_tree = MergedTree::new(store.clone(), merge.clone(), ConflictLabels::unlabeled());
+        Some(Arc::new(GitAttributes::new(
+            TreeFileLoader::new(input_tree),
+            NoneFileLoader::new(),
+        )))
+    };
+
     let mut merger = TreeMerger {
         store: store.clone(),
         trees_to_resolve: BTreeMap::new(),
         work: FuturesUnordered::new(),
         unstarted_work: BTreeMap::new(),
+        #[cfg(feature = "git")]
+        git_attributes,
     };
     merger.enqueue_tree_read(
         RepoPathBuf::root(),
@@ -201,6 +215,8 @@ struct TreeMerger {
     work: FuturesUnordered<BoxFuture<'static, TreeMergerWorkOutput>>,
     // Futures we haven't started polling yet, in order to respect the backend's concurrency limit.
     unstarted_work: BTreeMap<TreeMergeWorkItemKey, BoxFuture<'static, TreeMergerWorkOutput>>,
+    #[cfg(feature = "git")]
+    git_attributes: Option<Arc<GitAttributes>>,
 }
 
 impl TreeMerger {
@@ -277,7 +293,12 @@ impl TreeMerger {
                 // TODO: If it's e.g. a dir/file conflict, there's no need to try to
                 // resolve it as a file. We should mark them to
                 // `unmerged_tree.conflicts` instead.
-                self.enqueue_file_merge(path, value);
+                self.enqueue_file_merge(
+                    path,
+                    value,
+                    #[cfg(feature = "git")]
+                    self.git_attributes.clone(),
+                );
             }
         }
 
@@ -303,10 +324,21 @@ impl TreeMerger {
         self.work.push(Box::pin(work_fut));
     }
 
-    fn enqueue_file_merge(&mut self, path: RepoPathBuf, value: MergedTreeValue) {
+    fn enqueue_file_merge(
+        &mut self,
+        path: RepoPathBuf,
+        value: MergedTreeValue,
+        #[cfg(feature = "git")] git_attributes: Option<Arc<GitAttributes>>,
+    ) {
         let key = TreeMergeWorkItemKey::MergeFiles { path: path.clone() };
-        let work_fut = resolve_file_values_owned(self.store.clone(), path.clone(), value)
-            .map(|result| TreeMergerWorkOutput::MergedFiles { path, result });
+        let work_fut = resolve_file_values_owned(
+            self.store.clone(),
+            path.clone(),
+            value,
+            #[cfg(feature = "git")]
+            git_attributes,
+        )
+        .map(|result| TreeMergerWorkOutput::MergedFiles { path, result });
         if self.work.len() < self.store.concurrency() {
             self.work.push(Box::pin(work_fut));
         } else {
@@ -360,8 +392,16 @@ async fn resolve_file_values_owned(
     store: Arc<Store>,
     path: RepoPathBuf,
     values: MergedTreeValue,
+    #[cfg(feature = "git")] git_attributes: Option<Arc<GitAttributes>>,
 ) -> BackendResult<MergedTreeValue> {
-    let maybe_resolved = try_resolve_file_values(&store, &path, &values).await?;
+    let maybe_resolved = try_resolve_file_values(
+        &store,
+        &path,
+        &values,
+        #[cfg(feature = "git")]
+        git_attributes,
+    )
+    .await?;
     Ok(maybe_resolved.unwrap_or(values))
 }
 
@@ -372,13 +412,21 @@ pub async fn resolve_file_values(
     store: &Arc<Store>,
     path: &RepoPath,
     values: MergedTreeValue,
+    #[cfg(feature = "git")] git_attributes: Option<Arc<GitAttributes>>,
 ) -> BackendResult<MergedTreeValue> {
     let same_change = store.merge_options().same_change;
     if let Some(resolved) = values.resolve_trivial(same_change) {
         return Ok(Merge::resolved(resolved.clone()));
     }
 
-    let maybe_resolved = try_resolve_file_values(store, path, &values).await?;
+    let maybe_resolved = try_resolve_file_values(
+        store,
+        path,
+        &values,
+        #[cfg(feature = "git")]
+        git_attributes,
+    )
+    .await?;
     Ok(maybe_resolved.unwrap_or(values))
 }
 
@@ -386,6 +434,7 @@ async fn try_resolve_file_values<T: Borrow<TreeValue>>(
     store: &Arc<Store>,
     path: &RepoPath,
     values: &Merge<Option<T>>,
+    #[cfg(feature = "git")] git_attributes: Option<Arc<GitAttributes>>,
 ) -> BackendResult<Option<MergedTreeValue>> {
     // The values may contain trees canceling each other (notably padded absent
     // trees), so we need to simplify them first.
@@ -394,7 +443,15 @@ async fn try_resolve_file_values<T: Borrow<TreeValue>>(
         .simplify();
     // No fast path for simplified.is_resolved(). If it could be resolved, it would
     // have been caught by values.resolve_trivial() above.
-    if let Some(resolved) = try_resolve_file_conflict(store, path, &simplified).await? {
+    if let Some(resolved) = try_resolve_file_conflict(
+        store,
+        path,
+        &simplified,
+        #[cfg(feature = "git")]
+        git_attributes,
+    )
+    .await?
+    {
         Ok(Some(Merge::normal(resolved)))
     } else {
         // Failed to merge the files, or the paths are not files
@@ -410,8 +467,24 @@ async fn try_resolve_file_conflict(
     store: &Store,
     filename: &RepoPath,
     conflict: &MergedTreeVal<'_>,
+    #[cfg(feature = "git")] git_attributes: Option<Arc<GitAttributes>>,
 ) -> BackendResult<Option<TreeValue>> {
-    let options = store.merge_options();
+    let mut options = store.merge_options().clone();
+
+    #[cfg(feature = "git")]
+    if let Some(git_attributes) = &git_attributes {
+        if git_attributes
+            .merge_3way_disabled(&filename, SearchPriority::Store)
+            .await?
+        {
+            // Disable 3-way merge of individual lines or hunks and mark the whole files as conflict
+            options = MergeOptions {
+                hunk_level: FileMergeHunkLevel::File,
+                same_change: options.same_change,
+            }
+        }
+    }
+
     // If there are any non-file or any missing parts in the conflict, we can't
     // merge it. We check early so we don't waste time reading file contents if
     // we can't merge them anyway. At the same time we determine whether the
@@ -489,7 +562,7 @@ async fn try_resolve_file_conflict(
             BackendResult::Ok(content)
         })
         .await?;
-    if let Some(merged_content) = files::try_merge(&contents, options) {
+    if let Some(merged_content) = files::try_merge(&contents, &options) {
         let id = store
             .write_file(filename, &mut merged_content.as_slice())
             .await?;

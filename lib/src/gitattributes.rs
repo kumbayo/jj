@@ -48,6 +48,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use crate::backend::MergedTreeValueExt as _;
+use crate::backend::TreeValue;
+use crate::merge::SameChange;
+use crate::merged_tree::MergedTree;
+use crate::repo_path::RepoPath;
+use crate::repo_path::RepoPathBuf;
+use crate::repo_path::RepoPathComponent;
 use futures::AsyncRead;
 use futures::AsyncReadExt as _;
 use futures::io::AllowStdIo;
@@ -56,14 +63,7 @@ use gix::attrs::State;
 use gix::attrs::glob::pattern::Case;
 use gix::attrs::search::MetadataCollection;
 use gix::attrs::search::Outcome;
-
-use crate::backend::MergedTreeValueExt as _;
-use crate::backend::TreeValue;
-use crate::merge::SameChange;
-use crate::merged_tree::MergedTree;
-use crate::repo_path::RepoPath;
-use crate::repo_path::RepoPathBuf;
-use crate::repo_path::RepoPathComponent;
+use gix::attrs::state::Value;
 
 /// Git Attributes instance
 ///
@@ -469,6 +469,57 @@ impl GitAttributes {
     }
 }
 
+impl GitAttributes {
+    /// Returns whether the given `path` has a `merge` attribute in
+    /// .gitattributes whose value disables the built-in 3-way merge.
+    pub(crate) async fn merge_3way_disabled(
+        &self,
+        path: &RepoPath,
+        priority: SearchPriority,
+    ) -> Result<bool, GitAttributesError> {
+        let result = self.search(path, ["merge"], priority).await?;
+
+        // https://git-scm.com/docs/gitattributes#_performing_a_three_way_merge
+        let m = result.get("merge");
+        match m {
+            Some(State::Set) => {
+                // Builtin 3-way merge driver
+                Ok(false)
+            }
+            Some(State::Value(v)) if v == &Value::from("text") => {
+                // Builtin 3-way merge driver
+                Ok(false)
+            }
+            Some(State::Unset) => {
+                // Requested the builtin binary merge driver
+                Ok(true)
+            }
+            Some(State::Value(v)) if v == &Value::from("binary") => {
+                // Requested the builtin binary merge driver
+                Ok(true)
+            }
+            Some(State::Value(v)) if v == &Value::from("union") => {
+                // Requested the builtin union merge driver (which we do not implement)
+                Ok(true)
+            }
+            Some(State::Value(_)) => {
+                // Requested a user defined merge driver (which we do not implement)
+                // We need to disable 3-way merges to not break files
+                Ok(true)
+            }
+            Some(State::Unspecified) => {
+                // Default to the builtin 3-way merge driver
+                Ok(false)
+            }
+            None => {
+                // TODO: How can this happen?
+                // Default to the builtin 3-way merge driver
+                Ok(false)
+            }
+        }
+    }
+}
+
 /// Errors for GitAttributes
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
@@ -482,7 +533,6 @@ pub struct GitAttributesError {
 mod tests {
 
     use futures::io::Cursor;
-    use gix::attrs::state::Value;
     use indoc::indoc;
     use pollster::FutureExt as _;
 

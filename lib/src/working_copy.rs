@@ -28,6 +28,8 @@ use tracing::instrument;
 
 use crate::backend::BackendError;
 use crate::commit::Commit;
+#[cfg(feature = "git")]
+use crate::gitattributes::GitAttributesError;
 use crate::gitignore::GitIgnoreError;
 use crate::gitignore::GitIgnoreFile;
 use crate::matchers::Matcher;
@@ -302,6 +304,10 @@ pub enum CheckoutError {
     /// Failed to load the working copy state.
     #[error(transparent)]
     WorkingCopyStateError(#[from] WorkingCopyStateError),
+    /// Failed to parse .gitattributes.
+    #[cfg(feature = "git")]
+    #[error(transparent)]
+    GitAttributesError(#[from] GitAttributesError),
     /// Some other error happened while checking out the working copy.
     #[error("{message}")]
     Other {

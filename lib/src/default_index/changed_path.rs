@@ -583,7 +583,14 @@ pub(super) async fn collect_changed_paths(
     let paths = tree_diff
         .map(|entry| entry.values.map(|values| (entry.path, values)))
         .try_filter_map(async |(path, mut diff)| {
-            diff.before = resolve_file_values(store, &path, diff.before).await?;
+            diff.before = resolve_file_values(
+                store,
+                &path,
+                diff.before,
+                #[cfg(feature = "git")]
+                None,
+            )
+            .await?;
             Ok(diff.is_changed().then_some(path))
         })
         .try_collect()
