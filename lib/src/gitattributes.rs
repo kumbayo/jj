@@ -205,6 +205,24 @@ impl FileLoader for DiskFileLoader {
     }
 }
 
+// Do not actually load any .gitignore files
+pub(crate) struct NoneFileLoader {}
+impl NoneFileLoader {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait::async_trait]
+impl FileLoader for NoneFileLoader {
+    async fn load(
+        &self,
+        _path: &RepoPath,
+    ) -> Result<Option<Box<dyn AsyncRead + Send + Unpin>>, GitAttributesError> {
+        Ok(None)
+    }
+}
+
 struct SearchAndCollection {
     search: Search,
     collection: MetadataCollection,
