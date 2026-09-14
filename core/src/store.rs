@@ -44,6 +44,7 @@ use crate::repo_path::RepoPath;
 use crate::repo_path::RepoPathBuf;
 use crate::signing::Signer;
 use crate::tree::Tree;
+use crate::tree_merge::TreeMergeOptions;
 
 // There are more tree objects than commits, and trees are often shared across
 // commits.
@@ -58,6 +59,7 @@ pub struct Store {
     commit_cache: Mutex<CLruCache<CommitId, Arc<backend::Commit>>>,
     tree_cache: Mutex<CLruCache<(RepoPathBuf, TreeId), Arc<backend::Tree>>>,
     merge_options: MergeOptions,
+    tree_merge_options: Arc<dyn TreeMergeOptions>,
 }
 
 impl Debug for Store {
@@ -74,6 +76,7 @@ impl Store {
         backend: Box<dyn Backend>,
         signer: Signer,
         merge_options: MergeOptions,
+        tree_merge_options: Arc<dyn TreeMergeOptions>,
     ) -> Arc<Self> {
         Arc::new(Self {
             backend,
@@ -81,6 +84,7 @@ impl Store {
             commit_cache: Mutex::new(CLruCache::new(COMMIT_CACHE_CAPACITY)),
             tree_cache: Mutex::new(CLruCache::new(TREE_CACHE_CAPACITY)),
             merge_options,
+            tree_merge_options,
         })
     }
 
@@ -102,6 +106,11 @@ impl Store {
     /// Default merge options to be used when resolving parent trees.
     pub fn merge_options(&self) -> &MergeOptions {
         &self.merge_options
+    }
+
+    /// Additional behavior to apply while resolving tree conflicts.
+    pub fn tree_merge_options(&self) -> &Arc<dyn TreeMergeOptions> {
+        &self.tree_merge_options
     }
 
     /// Returns the copy records between `root` and `head`. See

@@ -56,14 +56,19 @@ use gix::attrs::State;
 use gix::attrs::glob::pattern::Case;
 use gix::attrs::search::MetadataCollection;
 use gix::attrs::search::Outcome;
+use gix::attrs::state::Value;
 
 use crate::backend::MergedTreeValueExt as _;
 use crate::backend::TreeValue;
+use crate::files::FileMergeHunkLevel;
 use crate::merge::SameChange;
 use crate::merged_tree::MergedTree;
 use crate::repo_path::RepoPath;
 use crate::repo_path::RepoPathBuf;
 use crate::repo_path::RepoPathComponent;
+use crate::tree_merge::FileMergePolicy;
+use crate::tree_merge::TreeMergeOptions;
+use futures::future::BoxFuture;
 
 /// Git Attributes instance
 ///
@@ -76,6 +81,43 @@ pub(crate) struct GitAttributes {
     disk_file_loader: Arc<dyn FileLoader>,
     store_file_loader: Arc<dyn FileLoader>,
     node_cache: Mutex<HashMap<RepoPathBuf, Arc<GitAttributesNode>>>,
+}
+
+pub(crate) fn tree_merge_options() -> Arc<dyn TreeMergeOptions> {
+    Arc::new(GitAttributesTreeMergeOptions)
+}
+
+struct GitAttributesTreeMergeOptions;
+
+impl TreeMergeOptions for GitAttributesTreeMergeOptions {
+    fn file_merge_policy(&self, input_tree: MergedTree) -> Arc<dyn FileMergePolicy> {
+        Arc::new(GitAttributesFileMergePolicy {
+            attributes: Arc::new(GitAttributes::new(
+                TreeFileLoader::new(input_tree),
+                NoneFileLoader::new(),
+            )),
+        })
+    }
+}
+
+struct GitAttributesFileMergePolicy {
+    attributes: Arc<GitAttributes>,
+}
+
+impl FileMergePolicy for GitAttributesFileMergePolicy {
+    fn hunk_level_for(
+        &self,
+        path: &RepoPath,
+    ) -> BoxFuture<'_, crate::backend::BackendResult<Option<FileMergeHunkLevel>>> {
+        let attributes = self.attributes.clone();
+        let path = path.to_owned();
+        Box::pin(async move {
+            Ok(attributes
+                .merge_3way_disabled(&path, SearchPriority::Store)
+                .await?
+                .then_some(FileMergeHunkLevel::File))
+        })
+    }
 }
 
 #[async_trait::async_trait]
@@ -479,6 +521,57 @@ impl GitAttributes {
     }
 }
 
+impl GitAttributes {
+    /// Returns whether the given `path` has a `merge` attribute in
+    /// .gitattributes whose value disables the built-in 3-way merge.
+    pub(crate) async fn merge_3way_disabled(
+        &self,
+        path: &RepoPath,
+        priority: SearchPriority,
+    ) -> Result<bool, GitAttributesError> {
+        let result = self.search(path, ["merge"], priority).await?;
+
+        // https://git-scm.com/docs/gitattributes#_performing_a_three_way_merge
+        let m = result.get("merge");
+        match m {
+            Some(State::Set) => {
+                // Builtin 3-way merge driver
+                Ok(false)
+            }
+            Some(State::Value(v)) if v == &Value::from("text") => {
+                // Builtin 3-way merge driver
+                Ok(false)
+            }
+            Some(State::Unset) => {
+                // Requested the builtin binary merge driver
+                Ok(true)
+            }
+            Some(State::Value(v)) if v == &Value::from("binary") => {
+                // Requested the builtin binary merge driver
+                Ok(true)
+            }
+            Some(State::Value(v)) if v == &Value::from("union") => {
+                // Requested the builtin union merge driver (which we do not implement)
+                Ok(true)
+            }
+            Some(State::Value(_)) => {
+                // Requested a user defined merge driver (which we do not implement)
+                // We need to disable 3-way merges to not break files
+                Ok(true)
+            }
+            Some(State::Unspecified) => {
+                // Default to the builtin 3-way merge driver
+                Ok(false)
+            }
+            None => {
+                // TODO: How can this happen?
+                // Default to the builtin 3-way merge driver
+                Ok(false)
+            }
+        }
+    }
+}
+
 /// Errors for GitAttributes
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
@@ -492,7 +585,6 @@ pub struct GitAttributesError {
 mod tests {
 
     use futures::io::Cursor;
-    use gix::attrs::state::Value;
     use indoc::indoc;
     use pollster::FutureExt as _;
 

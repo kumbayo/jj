@@ -80,6 +80,7 @@ use crate::file_util::BadPathEncoding;
 use crate::file_util::IoResultExt as _;
 use crate::file_util::PathError;
 use crate::git::GitSettings;
+use crate::gitattributes::GitAttributesError;
 use crate::lock::FileLock;
 use crate::merge::Merge;
 use crate::merge::MergeBuilder;
@@ -154,6 +155,14 @@ pub enum GitBackendError {
 impl From<GitBackendError> for BackendError {
     fn from(err: GitBackendError) -> Self {
         Self::Other(err.into())
+    }
+}
+
+#[cfg(feature = "git")]
+impl From<GitAttributesError> for BackendError {
+    fn from(err: GitAttributesError) -> Self {
+        Self::Other(err.into())
+        //user_error_with_message("Failed to process .gitattributes.", err)
     }
 }
 

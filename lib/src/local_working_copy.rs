@@ -42,26 +42,6 @@ use std::sync::mpsc::Sender;
 use std::sync::mpsc::channel;
 use std::time::SystemTime;
 
-use async_trait::async_trait;
-use either::Either;
-use futures::AsyncRead;
-use futures::AsyncReadExt as _;
-use futures::StreamExt as _;
-use futures::TryStreamExt as _;
-use futures::io::AllowStdIo;
-use itertools::EitherOrBoth;
-use itertools::Itertools as _;
-use once_cell::unsync::OnceCell;
-use pollster::FutureExt as _;
-use prost::Message as _;
-use rayon::iter::IntoParallelIterator as _;
-use rayon::prelude::IndexedParallelIterator as _;
-use rayon::prelude::ParallelIterator as _;
-use tempfile::NamedTempFile;
-use thiserror::Error;
-use tracing::instrument;
-use tracing::trace_span;
-
 use crate::backend::BackendError;
 use crate::backend::CopyId;
 use crate::backend::FileId;
@@ -89,6 +69,10 @@ use crate::file_util::check_symlink_support;
 use crate::file_util::copy_async_to_sync;
 use crate::file_util::persist_temp_file;
 use crate::file_util::symlink_file;
+#[cfg(feature = "git")]
+use crate::files::FileMergeHunkLevel;
+#[cfg(feature = "git")]
+use crate::files::MergeOptions;
 use crate::fsmonitor::FsmonitorSettings;
 #[cfg(feature = "watchman")]
 use crate::fsmonitor::WatchmanConfig;
@@ -100,6 +84,8 @@ use crate::git::GitSettings;
 use crate::gitattributes::DiskFileLoader;
 #[cfg(feature = "git")]
 use crate::gitattributes::GitAttributes;
+#[cfg(feature = "git")]
+use crate::gitattributes::NoneFileLoader;
 #[cfg(feature = "git")]
 use crate::gitattributes::SearchPriority;
 #[cfg(feature = "git")]
@@ -140,6 +126,25 @@ use crate::working_copy::UntrackedReason;
 use crate::working_copy::WorkingCopy;
 use crate::working_copy::WorkingCopyFactory;
 use crate::working_copy::WorkingCopyStateError;
+use async_trait::async_trait;
+use either::Either;
+use futures::AsyncRead;
+use futures::AsyncReadExt as _;
+use futures::StreamExt as _;
+use futures::TryStreamExt as _;
+use futures::io::AllowStdIo;
+use itertools::EitherOrBoth;
+use itertools::Itertools as _;
+use once_cell::unsync::OnceCell;
+use pollster::FutureExt as _;
+use prost::Message as _;
+use rayon::iter::IntoParallelIterator as _;
+use rayon::prelude::IndexedParallelIterator as _;
+use rayon::prelude::ParallelIterator as _;
+use tempfile::NamedTempFile;
+use thiserror::Error;
+use tracing::instrument;
+use tracing::trace_span;
 
 fn symlink_target_convert_to_store(path: &Path) -> Option<Cow<'_, str>> {
     let path = path.to_str()?;
@@ -2423,6 +2428,15 @@ impl TreeState {
         new_tree: &MergedTree,
         matcher: &dyn Matcher,
     ) -> Result<CheckoutStats, CheckoutError> {
+        #[cfg(feature = "git")]
+        let git_attributes = {
+            //let input_tree = MergedTree::new(self.store.clone(), merge.clone(), ConflictLabels::unlabeled());
+            Some(Arc::new(GitAttributes::new(
+                TreeFileLoader::new(new_tree.clone()),
+                NoneFileLoader::new(),
+            )))
+        };
+
         // TODO: maybe it's better not include the skipped counts in the "intended"
         // counts
         let mut stats = CheckoutStats {
@@ -2601,10 +2615,26 @@ impl TreeState {
                 MaterializedTreeValue::FileConflict(file) => {
                     let conflict_marker_len =
                         choose_materialized_conflict_marker_len(&file.contents);
+                    #[allow(unused_mut)]
+                    let mut merge_options = self.store.merge_options().clone();
+                    #[cfg(feature = "git")]
+                    if let Some(git_attributes) = &git_attributes {
+                        if git_attributes
+                            .merge_3way_disabled(&path, SearchPriority::Store)
+                            .await?
+                        {
+                            // Disable 3-way merge of individual lines or hunks and mark the whole files as conflict
+                            merge_options = MergeOptions {
+                                hunk_level: FileMergeHunkLevel::File,
+                                same_change: merge_options.same_change,
+                            }
+                        }
+                    }
+
                     let options = ConflictMaterializeOptions {
                         marker_style: self.conflict_marker_style,
                         marker_len: Some(conflict_marker_len),
-                        merge: self.store.merge_options().clone(),
+                        merge: merge_options,
                     };
                     let exec_bit = ExecBit::new_from_repo(
                         file.executable.unwrap_or(false),

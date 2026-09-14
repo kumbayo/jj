@@ -38,9 +38,10 @@ use crate::backend::MergedTreeValueExt as _;
 use crate::backend::TreeId;
 use crate::backend::TreeValue;
 use crate::files;
+use crate::files::FileMergeHunkLevel;
 use crate::merge::Merge;
 use crate::merge::SameChange;
-use crate::merged_tree::all_merged_tree_entries;
+use crate::merged_tree::{MergedTree, all_merged_tree_entries};
 use crate::object_id::ObjectId as _;
 use crate::repo_path::RepoPath;
 use crate::repo_path::RepoPathBuf;
@@ -48,6 +49,46 @@ use crate::repo_path::RepoPathComponentBuf;
 use crate::store::Store;
 use crate::tree::ToTreeMergeExt as _;
 use crate::tree::Tree;
+
+/// Selects file merge behavior for paths in one tree merge operation.
+pub trait FileMergePolicy: Send + Sync {
+    /// Returns a hunk-level override for `path`, or `None` to use the store's
+    /// default merge options.
+    fn hunk_level_for(
+        &self,
+        path: &RepoPath,
+    ) -> BoxFuture<'_, BackendResult<Option<FileMergeHunkLevel>>>;
+}
+
+/// Creates per-operation file merge policies.
+///
+/// The input tree is the unmodified tree merge being resolved. Keeping this
+/// factory separate lets integrations use data stored in that tree (such as
+/// `.gitattributes`) without making `jj-core` depend on a particular format.
+pub trait TreeMergeOptions: Send + Sync {
+    /// Creates the file merge policy for a tree merge operation.
+    fn file_merge_policy(&self, input_tree: MergedTree) -> Arc<dyn FileMergePolicy>;
+}
+
+/// The default tree merge behavior, which doesn't override file merge options.
+pub struct DefaultTreeMergeOptions;
+
+impl TreeMergeOptions for DefaultTreeMergeOptions {
+    fn file_merge_policy(&self, _input_tree: MergedTree) -> Arc<dyn FileMergePolicy> {
+        Arc::new(DefaultFileMergePolicy)
+    }
+}
+
+struct DefaultFileMergePolicy;
+
+impl FileMergePolicy for DefaultFileMergePolicy {
+    fn hunk_level_for(
+        &self,
+        _path: &RepoPath,
+    ) -> BoxFuture<'_, BackendResult<Option<FileMergeHunkLevel>>> {
+        async { Ok(None) }.boxed()
+    }
+}
 
 /// The returned conflict will either be resolved or have the same number of
 /// sides as the input.
@@ -57,11 +98,20 @@ pub async fn merge_trees(store: &Arc<Store>, merge: Merge<TreeId>) -> BackendRes
         Err(merge) => merge,
     };
 
+    let file_merge_policy = store
+        .tree_merge_options()
+        .file_merge_policy(MergedTree::new(
+            store.clone(),
+            merge.clone(),
+            crate::conflict_labels::ConflictLabels::unlabeled(),
+        ));
+
     let mut merger = TreeMerger {
         store: store.clone(),
         trees_to_resolve: BTreeMap::new(),
         work: FuturesUnordered::new(),
         unstarted_work: BTreeMap::new(),
+        file_merge_policy,
     };
     merger.enqueue_tree_read(
         RepoPathBuf::root(),
@@ -179,6 +229,7 @@ struct TreeMerger {
     work: FuturesUnordered<BoxFuture<'static, TreeMergerWorkOutput>>,
     // Futures we haven't started polling yet, in order to respect the backend's concurrency limit.
     unstarted_work: BTreeMap<TreeMergeWorkItemKey, BoxFuture<'static, TreeMergerWorkOutput>>,
+    file_merge_policy: Arc<dyn FileMergePolicy>,
 }
 
 impl TreeMerger {
@@ -282,8 +333,13 @@ impl TreeMerger {
 
     fn enqueue_file_merge(&mut self, path: RepoPathBuf, value: MergedTreeValue) {
         let key = TreeMergeWorkItemKey::MergeFiles { path: path.clone() };
-        let work_fut = resolve_file_values_owned(self.store.clone(), path.clone(), value)
-            .map(|result| TreeMergerWorkOutput::MergedFiles { path, result });
+        let work_fut = resolve_file_values_owned(
+            self.store.clone(),
+            path.clone(),
+            value,
+            self.file_merge_policy.clone(),
+        )
+        .map(|result| TreeMergerWorkOutput::MergedFiles { path, result });
         if self.work.len() < self.store.concurrency() {
             self.work.push(Box::pin(work_fut));
         } else {
@@ -337,8 +393,9 @@ async fn resolve_file_values_owned(
     store: Arc<Store>,
     path: RepoPathBuf,
     values: MergedTreeValue,
+    file_merge_policy: Arc<dyn FileMergePolicy>,
 ) -> BackendResult<MergedTreeValue> {
-    let maybe_resolved = try_resolve_file_values(&store, &path, &values).await?;
+    let maybe_resolved = try_resolve_file_values(&store, &path, &values, file_merge_policy).await?;
     Ok(maybe_resolved.unwrap_or(values))
 }
 
@@ -355,7 +412,8 @@ pub async fn resolve_file_values(
         return Ok(Merge::resolved(resolved.clone()));
     }
 
-    let maybe_resolved = try_resolve_file_values(store, path, &values).await?;
+    let maybe_resolved =
+        try_resolve_file_values(store, path, &values, Arc::new(DefaultFileMergePolicy)).await?;
     Ok(maybe_resolved.unwrap_or(values))
 }
 
@@ -363,6 +421,7 @@ async fn try_resolve_file_values<T: Borrow<TreeValue>>(
     store: &Arc<Store>,
     path: &RepoPath,
     values: &Merge<Option<T>>,
+    file_merge_policy: Arc<dyn FileMergePolicy>,
 ) -> BackendResult<Option<MergedTreeValue>> {
     // The values may contain trees canceling each other (notably padded absent
     // trees), so we need to simplify them first.
@@ -371,7 +430,9 @@ async fn try_resolve_file_values<T: Borrow<TreeValue>>(
         .simplify();
     // No fast path for simplified.is_resolved(). If it could be resolved, it would
     // have been caught by values.resolve_trivial() above.
-    if let Some(resolved) = try_resolve_file_conflict(store, path, &simplified).await? {
+    if let Some(resolved) =
+        try_resolve_file_conflict(store, path, &simplified, file_merge_policy).await?
+    {
         Ok(Some(Merge::normal(resolved)))
     } else {
         // Failed to merge the files, or the paths are not files
@@ -387,8 +448,10 @@ async fn try_resolve_file_conflict(
     store: &Store,
     filename: &RepoPath,
     conflict: &MergedTreeVal<'_>,
+    file_merge_policy: Arc<dyn FileMergePolicy>,
 ) -> BackendResult<Option<TreeValue>> {
-    let options = store.merge_options();
+    let mut options = store.merge_options().clone();
+
     // If there are any non-file or any missing parts in the conflict, we can't
     // merge it. We check early so we don't waste time reading file contents if
     // we can't merge them anyway. At the same time we determine whether the
@@ -451,6 +514,10 @@ async fn try_resolve_file_conflict(
     //    cannot
     let file_id_conflict = file_id_conflict.simplify();
 
+    if let Some(hunk_level) = file_merge_policy.hunk_level_for(filename).await? {
+        options.hunk_level = hunk_level;
+    }
+
     let contents = file_id_conflict
         .try_map_async(async |file_id| {
             let mut content = vec![];
@@ -466,7 +533,7 @@ async fn try_resolve_file_conflict(
             BackendResult::Ok(content)
         })
         .await?;
-    if let Some(merged_content) = files::try_merge(&contents, options) {
+    if let Some(merged_content) = files::try_merge(&contents, &options) {
         let id = store
             .write_file(filename, &mut merged_content.as_slice())
             .await?;

@@ -35,7 +35,8 @@ use itertools::Itertools as _;
 use once_cell::sync::OnceCell;
 use thiserror::Error;
 use tracing::instrument;
-
+#[cfg(not(feature = "git"))]
+use jj_core::tree_merge::DefaultTreeMergeOptions;
 use crate::backend::Backend;
 use crate::backend::BackendError;
 use crate::backend::BackendInitError;
@@ -234,7 +235,16 @@ impl ReadonlyRepo {
         let merge_options = settings
             .merge_options()
             .map_err(|err| BackendInitError(err.into()))?;
-        let store = Store::new(backend, signer, merge_options);
+
+        let store = Store::new(
+            backend,
+            signer,
+            merge_options,
+            #[cfg(feature = "git")]
+            crate::gitattributes::tree_merge_options(),
+            #[cfg(not(feature = "git"))]
+            Arc::new(DefaultTreeMergeOptions),
+        );
 
         let workspace_store_path = repo_path.join("workspace_store");
         fs::create_dir(&workspace_store_path).context(&workspace_store_path)?;
@@ -742,6 +752,10 @@ impl RepoLoader {
             store_factories.load_backend(settings, &repo_path.join("store"))?,
             signer_from_settings(settings)?,
             merge_options,
+            #[cfg(feature = "git")]
+            crate::gitattributes::tree_merge_options(),
+            #[cfg(not(feature = "git"))]
+            Arc::new(DefaultTreeMergeOptions),
         );
         let workspace_store = Arc::from(
             store_factories.load_workspace_store(settings, &repo_path.join("workspace_store"))?,

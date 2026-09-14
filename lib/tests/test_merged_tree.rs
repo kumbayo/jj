@@ -81,6 +81,46 @@ fn diff_stream_sequential_equals_concurrent(
     assert_eq!(diff_with_concurrency(1), diff_with_concurrency(10));
 }
 
+#[test]
+fn test_merged_tree_respects_gitattributes_merge_driver() -> TestResult {
+    let test_repo = TestRepo::init();
+    let repo = &test_repo.repo;
+
+    let attributes_path = repo_path(".gitattributes");
+    let path = repo_path("file.txt");
+    let base = create_tree(
+        repo,
+        &[
+            (attributes_path, "*.txt merge=custom\n"),
+            (path, "a\nb\nc\n"),
+        ],
+    );
+    let left = create_tree(
+        repo,
+        &[
+            (attributes_path, "*.txt merge=custom\n"),
+            (path, "left\nb\nc\n"),
+        ],
+    );
+    let right = create_tree(
+        repo,
+        &[
+            (attributes_path, "*.txt merge=custom\n"),
+            (path, "a\nb\nright\n"),
+        ],
+    );
+
+    let merged = MergedTree::merge(Merge::from_vec(vec![
+        (left, "left".into()),
+        (base, "base".into()),
+        (right, "right".into()),
+    ]))
+    .block_on()?;
+
+    assert!(merged.has_conflict());
+    Ok(())
+}
+
 /// Test that a tree built with no changes on top of an add/add conflict does
 /// not get resolved.
 #[test]

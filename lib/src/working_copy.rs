@@ -308,6 +308,10 @@ pub enum CheckoutError {
     /// Failed to load the working copy state.
     #[error(transparent)]
     WorkingCopyStateError(#[from] WorkingCopyStateError),
+    /// Failed to parse .gitattributes.
+    #[cfg(feature = "git")]
+    #[error(transparent)]
+    GitAttributesError(#[from] GitAttributesError),
     /// Some other error happened while checking out the working copy.
     #[error("{message}")]
     Other {
