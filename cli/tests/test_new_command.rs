@@ -292,6 +292,258 @@ fn test_new_merge_conflicts() {
 }
 
 #[test]
+fn test_new_merge_gitattributes_merge() {
+    let test_env = TestEnvironment::default();
+    test_env.run_jj_in(".", ["git", "init", "repo"]).success();
+    let work_dir = test_env.work_dir("repo");
+
+    create_commit_with_files(&work_dir, "0", &[], &[("file", "1\n2\n3\n4\n5")]);
+    create_commit_with_files(&work_dir, "1", &["0"], &[]);
+    create_commit_with_files(&work_dir, "2", &["1"], &[("file", "1A\n2\n3\n4\n5")]);
+    create_commit_with_files(&work_dir, "3", &["1"], &[("file", "1\n2\n3\n4\n5B")]);
+
+    // 3-way merge driver (default)
+    create_commit_with_files(&work_dir, "1_merge_unspecified", &["-B", "1"], &[]);
+
+    let output = work_dir.run_jj(["new", "2|3"]);
+    insta::assert_snapshot!(output, @"
+    ------- stderr -------
+    Working copy  (@) now at: kmkuslsw 28f4214e (empty) (no description set)
+    Parent commit (@-)      : vruxwmqv 83b29782 3 | 3
+    Parent commit (@-)      : royxmykx e76eb563 2 | 2
+    Added 0 files, modified 1 files, removed 0 files
+    [EOF]
+    ");
+    insta::assert_snapshot!(work_dir.read_file("file"), @"
+    1A
+    2
+    3
+    4
+    5B
+    ");
+
+    // reset working copy
+    work_dir.run_jj(["new", "root()"]).success();
+
+    // 3-way merge driver (merge)
+    create_commit_with_files(
+        &work_dir,
+        "1_merge_set",
+        &["-B", "1"],
+        &[(".gitattributes", "* merge")],
+    );
+
+    let output = work_dir.run_jj(["new", "2|3"]);
+    insta::assert_snapshot!(output, @"
+    ------- stderr -------
+    Working copy  (@) now at: nkmrtpmo a87511ea (empty) (no description set)
+    Parent commit (@-)      : vruxwmqv 55cf3410 3 | 3
+    Parent commit (@-)      : royxmykx 7b635676 2 | 2
+    Added 0 files, modified 1 files, removed 0 files
+    [EOF]
+    ");
+    insta::assert_snapshot!(work_dir.read_file("file"), @r#"
+    1A
+    2
+    3
+    4
+    5B
+    "#);
+
+    // reset working copy
+    work_dir.run_jj(["new", "root()"]).success();
+
+    // 3-way merge driver (merge=text)
+    create_commit_with_files(
+        &work_dir,
+        "1_merge_text",
+        &["-B", "1"],
+        &[(".gitattributes", "* merge=text")],
+    );
+
+    let output = work_dir.run_jj(["new", "2|3"]);
+    insta::assert_snapshot!(output, @"
+    ------- stderr -------
+    Working copy  (@) now at: nmzmmopx 250d9074 (empty) (no description set)
+    Parent commit (@-)      : vruxwmqv febec6b2 3 | 3
+    Parent commit (@-)      : royxmykx c1bbdc3b 2 | 2
+    Added 0 files, modified 1 files, removed 0 files
+    [EOF]
+    ");
+    insta::assert_snapshot!(work_dir.read_file("file"), @"
+    1A
+    2
+    3
+    4
+    5B
+    ");
+
+    // reset working copy
+    work_dir.run_jj(["new", "root()"]).success();
+
+    // Disable 3-way merge (-merge)
+    create_commit_with_files(
+        &work_dir,
+        "1_merge_unset",
+        &["-B", "1"],
+        &[(".gitattributes", "* -merge")],
+    );
+
+    let output = work_dir.run_jj(["new", "2|3"]);
+    insta::assert_snapshot!(output, @"
+    ------- stderr -------
+    Working copy  (@) now at: pzsxstzt 3924e465 (conflict) (empty) (no description set)
+    Parent commit (@-)      : vruxwmqv 4c287a9f 3 | 3
+    Parent commit (@-)      : royxmykx b2c45e33 2 | 2
+    Added 0 files, modified 1 files, removed 0 files
+    Warning: There are unresolved conflicts at these paths:
+    file    2-sided conflict
+    [EOF]
+    ");
+    insta::assert_snapshot!(work_dir.read_file("file"), @r#"
+    <<<<<<< conflict 1 of 1
+    %%%%%%% diff from: zsuskuln c0c321fb "1" (no terminating newline)
+    \\\\\\\        to: vruxwmqv 4c287a9f "3" (no terminating newline)
+     1
+     2
+     3
+     4
+    -5
+    +5B
+    +++++++ royxmykx b2c45e33 "2" (no terminating newline)
+    1A
+    2
+    3
+    4
+    5
+    >>>>>>> conflict 1 of 1 ends
+    "#);
+
+    // reset working copy
+    work_dir.run_jj(["new", "root()"]).success();
+
+    // Disable 3-way merge (merge=binary)
+    create_commit_with_files(
+        &work_dir,
+        "1_merge_binary",
+        &["-B", "1"],
+        &[(".gitattributes", "* merge=binary")],
+    );
+
+    let output = work_dir.run_jj(["new", "2|3"]);
+    insta::assert_snapshot!(output, @"
+    ------- stderr -------
+    Working copy  (@) now at: oupztwtk 1c63718f (conflict) (empty) (no description set)
+    Parent commit (@-)      : vruxwmqv 05c24920 3 | 3
+    Parent commit (@-)      : royxmykx 2ccb1707 2 | 2
+    Added 0 files, modified 1 files, removed 0 files
+    Warning: There are unresolved conflicts at these paths:
+    file    2-sided conflict
+    [EOF]
+    ");
+    insta::assert_snapshot!(work_dir.read_file("file"), @r#"
+    <<<<<<< conflict 1 of 1
+    %%%%%%% diff from: zsuskuln 3c15d197 "1" (no terminating newline)
+    \\\\\\\        to: vruxwmqv 05c24920 "3" (no terminating newline)
+     1
+     2
+     3
+     4
+    -5
+    +5B
+    +++++++ royxmykx 2ccb1707 "2" (no terminating newline)
+    1A
+    2
+    3
+    4
+    5
+    >>>>>>> conflict 1 of 1 ends
+    "#);
+
+    // reset working copy
+    work_dir.run_jj(["new", "root()"]).success();
+
+    // Disable 3-way merge (merge=custom) (not supported so we use the binary merge driver)
+    create_commit_with_files(
+        &work_dir,
+        "1_merge_custom",
+        &["-B", "1"],
+        &[(".gitattributes", "* merge=custom")],
+    );
+
+    let output = work_dir.run_jj(["new", "2|3"]);
+    insta::assert_snapshot!(output, @"
+    ------- stderr -------
+    Working copy  (@) now at: zowrlwsv 5d07e7a2 (conflict) (empty) (no description set)
+    Parent commit (@-)      : vruxwmqv 2825fe74 3 | 3
+    Parent commit (@-)      : royxmykx 39554846 2 | 2
+    Added 0 files, modified 1 files, removed 0 files
+    Warning: There are unresolved conflicts at these paths:
+    file    2-sided conflict
+    [EOF]
+    ");
+    insta::assert_snapshot!(work_dir.read_file("file"), @r#"
+    <<<<<<< conflict 1 of 1
+    %%%%%%% diff from: zsuskuln 1edab7c3 "1" (no terminating newline)
+    \\\\\\\        to: vruxwmqv 2825fe74 "3" (no terminating newline)
+     1
+     2
+     3
+     4
+    -5
+    +5B
+    +++++++ royxmykx 39554846 "2" (no terminating newline)
+    1A
+    2
+    3
+    4
+    5
+    >>>>>>> conflict 1 of 1 ends
+    "#);
+
+    // reset working copy
+    work_dir.run_jj(["new", "root()"]).success();
+
+    // Disable 3-way merge (binary)
+    create_commit_with_files(
+        &work_dir,
+        "1_binary_set",
+        &["-B", "1"],
+        &[(".gitattributes", "* binary")],
+    );
+
+    let output = work_dir.run_jj(["new", "2|3"]);
+    insta::assert_snapshot!(output, @"
+    ------- stderr -------
+    Working copy  (@) now at: nsrwusvy 70873966 (conflict) (empty) (no description set)
+    Parent commit (@-)      : vruxwmqv 758bf973 3 | 3
+    Parent commit (@-)      : royxmykx 6b74faca 2 | 2
+    Added 0 files, modified 1 files, removed 0 files
+    Warning: There are unresolved conflicts at these paths:
+    file    2-sided conflict
+    [EOF]
+    ");
+    insta::assert_snapshot!(work_dir.read_file("file"), @r#"
+    <<<<<<< conflict 1 of 1
+    %%%%%%% diff from: zsuskuln 81481f02 "1" (no terminating newline)
+    \\\\\\\        to: vruxwmqv 758bf973 "3" (no terminating newline)
+     1
+     2
+     3
+     4
+    -5
+    +5B
+    +++++++ royxmykx 6b74faca "2" (no terminating newline)
+    1A
+    2
+    3
+    4
+    5
+    >>>>>>> conflict 1 of 1 ends
+    "#);
+}
+
+#[test]
 fn test_new_merge_same_change() {
     let test_env = TestEnvironment::default();
     test_env.run_jj_in(".", ["git", "init", "repo"]).success();
