@@ -544,6 +544,186 @@ fn test_new_merge_gitattributes_merge() {
 }
 
 #[test]
+fn test_new_merge_gitattributes_merge_diff() {
+    let test_env = TestEnvironment::default();
+    test_env.run_jj_in(".", ["git", "init", "repo"]).success();
+    let work_dir = test_env.work_dir("repo");
+
+    create_commit_with_files(
+        &work_dir,
+        "0",
+        &[],
+        &[("file", "lines: 5\n1\n2\n3\n4\n5\n")],
+    );
+    create_commit_with_files(&work_dir, "1", &["0"], &[]);
+    create_commit_with_files(
+        &work_dir,
+        "2",
+        &["1"],
+        &[("file", "lines: 6\n1\n2\nA\n3\n4\n5\n")],
+    );
+    create_commit_with_files(
+        &work_dir,
+        "3",
+        &["1"],
+        &[("file", "lines: 6\n1\n2\n3\n4\n5\nB\n")],
+    );
+
+    // 3-way merge driver (default) produces semantically incorrect merge
+    create_commit_with_files(&work_dir, "1_merge_unspecified", &["-B", "1"], &[]);
+
+    let output = work_dir.run_jj(["new", "2|3"]);
+    insta::assert_snapshot!(output, @"
+    ------- stderr -------
+    Working copy  (@) now at: kmkuslsw b5d9aa4c (empty) (no description set)
+    Parent commit (@-)      : vruxwmqv a08f4a87 3 | 3
+    Parent commit (@-)      : royxmykx 9919bca2 2 | 2
+    Added 0 files, modified 1 files, removed 0 files
+    [EOF]
+    ");
+    insta::assert_snapshot!(work_dir.read_file("file"), @"
+    lines: 6
+    1
+    2
+    A
+    3
+    4
+    5
+    B
+    ");
+
+    // reset working copy
+    work_dir.run_jj(["new", "root()"]).success();
+
+    // Disable 3-way merge (-merge) to produce a merge conflict
+    create_commit_with_files(
+        &work_dir,
+        "1_merge_unset",
+        &["-B", "1"],
+        &[(".gitattributes", "* -merge")],
+    );
+
+    let output = work_dir.run_jj(["new", "2|3"]);
+    insta::assert_snapshot!(output, @"
+    ------- stderr -------
+    Working copy  (@) now at: nkmrtpmo 2640185c (conflict) (empty) (no description set)
+    Parent commit (@-)      : vruxwmqv 1d866465 3 | 3
+    Parent commit (@-)      : royxmykx 58f482c7 2 | 2
+    Added 0 files, modified 1 files, removed 0 files
+    Warning: There are unresolved conflicts at these paths:
+    file    2-sided conflict
+    [EOF]
+    ");
+    insta::assert_snapshot!(work_dir.read_file("file"), @r#"
+    <<<<<<< conflict 1 of 1
+    %%%%%%% diff from: zsuskuln 31327c73 "1"
+    \\\\\\\        to: vruxwmqv 1d866465 "3"
+    -lines: 5
+    +lines: 6
+     1
+     2
+     3
+     4
+     5
+    +B
+    +++++++ royxmykx 58f482c7 "2"
+    lines: 6
+    1
+    2
+    A
+    3
+    4
+    5
+    >>>>>>> conflict 1 of 1 ends
+    "#);
+
+    let output = work_dir.run_jj(["show"]);
+    insta::assert_snapshot!(output, @"
+    Commit ID: 2640185c536e8ab420084a9bf063dd4e350ee531
+    Change ID: nkmrtpmomlromvvqpowoqtttrorzvqls
+    Author   : Test User <test.user@example.com> (2001-02-03 08:05:22)
+    Committer: Test User <test.user@example.com> (2001-02-03 08:05:22)
+
+        (no description set)
+
+    [EOF]
+    ");
+
+    // Manually resolve conflict in semantically correct way
+    work_dir.write_file("file", "lines: 7\n1\n2\nA\n3\n4\n5\nB\n");
+
+    let output = work_dir.run_jj(["show", "--config=ui.diff-formatter=:git"]);
+    insta::assert_snapshot!(output, @"
+    Commit ID: f6e2a26abe7b13f8539cb2ccd40f48cb28d5b2c5
+    Change ID: nkmrtpmomlromvvqpowoqtttrorzvqls
+    Author   : Test User <test.user@example.com> (2001-02-03 08:05:24)
+    Committer: Test User <test.user@example.com> (2001-02-03 08:05:24)
+
+        (no description set)
+
+    diff --git a/file b/file
+    index 0000000000..4ae1cd26c6 100644
+    --- a/file
+    +++ b/file
+    @@ -1,4 +1,4 @@
+    -lines: 6
+    +lines: 7
+     1
+     2
+     A
+    [EOF]
+    ");
+
+    // TODO: This part of the test is not necessary but interesing for review
+    let output = work_dir.run_jj(["show", "@-", "--config=ui.diff-formatter=:git"]);
+    insta::assert_snapshot!(output, @"
+    Commit ID: 1d86646510d8338210c88b7273549e27d340a60f
+    Change ID: vruxwmqvtpmxqkrrksmzyrvxysqqlsxp
+    Bookmarks: 3
+    Author   : Test User <test.user@example.com> (2001-02-03 08:05:14)
+    Committer: Test User <test.user@example.com> (2001-02-03 08:05:21)
+
+        3
+
+    diff --git a/file b/file
+    index 071a03c77b..89d38105f3 100644
+    --- a/file
+    +++ b/file
+    @@ -1,6 +1,7 @@
+    -lines: 5
+    +lines: 6
+     1
+     2
+     3
+     4
+     5
+    +B
+    Commit ID: 58f482c75de65a6f61646599390cbef52393c4a0
+    Change ID: royxmykxtrkrqppotnrvutxlvrvqyxmy
+    Bookmarks: 2
+    Author   : Test User <test.user@example.com> (2001-02-03 08:05:12)
+    Committer: Test User <test.user@example.com> (2001-02-03 08:05:21)
+
+        2
+
+    diff --git a/file b/file
+    index 071a03c77b..17b75015d5 100644
+    --- a/file
+    +++ b/file
+    @@ -1,6 +1,7 @@
+    -lines: 5
+    +lines: 6
+     1
+     2
+    +A
+     3
+     4
+     5
+    [EOF]
+    ");
+}
+
+#[test]
 fn test_new_merge_same_change() {
     let test_env = TestEnvironment::default();
     test_env.run_jj_in(".", ["git", "init", "repo"]).success();
