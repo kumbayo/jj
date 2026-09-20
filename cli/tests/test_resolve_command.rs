@@ -21,6 +21,8 @@ use crate::common::CommandOutput;
 use crate::common::TestEnvironment;
 use crate::common::TestWorkDir;
 use crate::common::create_commit_with_files;
+use crate::common::fake_editor_path;
+use crate::common::to_toml_value;
 
 #[must_use]
 fn get_log_output(work_dir: &TestWorkDir) -> CommandOutput {
@@ -513,6 +515,45 @@ fn test_resolution() -> TestResult {
     Caused by: Tool exited with exit status: 1, but did not produce valid conflict markers (run with --debug to see the exact invocation)
     [EOF]
     [exit status: 1]
+    ");
+    Ok(())
+}
+
+#[test]
+fn test_resolution_with_git_mergetool_config() -> TestResult {
+    let mut test_env = TestEnvironment::default();
+    let editor_script = test_env.env_root().join("edit_script");
+    std::fs::write(&editor_script, "write\nresolution from git mergetool\n")?;
+    test_env.add_env_var("EDIT_SCRIPT", &editor_script);
+    test_env.run_jj_in(".", ["git", "init", "repo"]).success();
+    let work_dir = test_env.work_dir("repo");
+
+    create_commit_with_files(&work_dir, "base", &[], &[("file", "base\n")]);
+    create_commit_with_files(&work_dir, "a", &["base"], &[("file", "a\n")]);
+    create_commit_with_files(&work_dir, "b", &["base"], &[("file", "b\n")]);
+    create_commit_with_files(&work_dir, "conflict", &["a", "b"], &[]);
+
+    let config_path = work_dir.root().join(".jj/repo/store/git/config");
+    let mut config = std::fs::read_to_string(&config_path)?;
+    config.push_str("\n[merge]\n\ttool = git-editor\n");
+    config.push_str("[mergetool \"git-editor\"]\n");
+    config.push_str(&format!(
+        "\tcmd = {}\n",
+        format!(r#"{} \"$MERGED\""#, fake_editor_path())
+    ));
+    std::fs::write(config_path, config)?;
+
+    insta::assert_snapshot!(work_dir.run_jj(["resolve"]), @"
+    ------- stderr -------
+    Resolving conflicts in: file
+    Working copy  (@) now at: vruxwmqv 7b1948cf conflict | conflict
+    Parent commit (@-)      : zsuskuln 45537d53 a | a
+    Parent commit (@-)      : royxmykx 89d1b299 b | b
+    Added 0 files, modified 1 files, removed 0 files
+    [EOF]
+    ");
+    insta::assert_snapshot!(work_dir.read_file("file"), @"
+    resolution from git mergetool
     ");
     Ok(())
 }
