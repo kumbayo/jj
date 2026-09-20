@@ -16,6 +16,7 @@ mod builtin;
 mod diff_working_copies;
 mod external;
 
+use std::str;
 use std::sync::Arc;
 
 use futures::future::try_join_all;
@@ -161,6 +162,30 @@ impl MergeTool {
             _ => Ok(get_external_tool_config(settings, name)?.map(Self::external)),
         }
     }
+}
+
+/// Loads a custom Git mergetool command.
+///
+/// Git executes `mergetool.<name>.cmd` through a shell. Jujutsu's external
+/// tool runner executes a program and its arguments directly, but its command
+/// parser handles the usual Git mergetool command form (a program followed by
+/// quoted file arguments). This deliberately doesn't try to reproduce Git's
+/// built-in mergetool definitions, which aren't stored in Git configuration.
+fn get_git_mergetool_config(config: &gix::config::File, name: &str) -> Option<ExternalMergeTool> {
+    let command = config.string_by("mergetool", name, "cmd")?;
+    let command = str::from_utf8(&command).ok()?;
+    let command = command
+        .replace("${BASE}", "$base")
+        .replace("${LOCAL}", "$left")
+        .replace("${REMOTE}", "$right")
+        .replace("${MERGED}", "$output")
+        .replace("$BASE", "$base")
+        .replace("$LOCAL", "$left")
+        .replace("$REMOTE", "$right")
+        .replace("$MERGED", "$output");
+    Some(ExternalMergeTool::with_merge_args(
+        &CommandNameAndArgs::from(&command),
+    ))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -387,6 +412,25 @@ impl MergeEditor {
     ) -> Result<Self, MergeToolConfigError> {
         let tool = MergeTool::get_tool_config(settings, name)?
             .unwrap_or_else(|| MergeTool::external(ExternalMergeTool::with_program(name)));
+        Self::new_inner(name, tool, path_converter, conflict_marker_style)
+    }
+
+    /// Creates a 3-way merge editor from Jujutsu settings, falling back to a
+    /// custom Git mergetool command of the same name.
+    pub fn with_name_and_git_config(
+        name: &str,
+        settings: &UserSettings,
+        git_config: Option<&gix::config::File>,
+        path_converter: RepoPathUiConverter,
+        conflict_marker_style: ConflictMarkerStyle,
+    ) -> Result<Self, MergeToolConfigError> {
+        let tool = MergeTool::get_tool_config(settings, name)?.or_else(|| {
+            git_config
+                .and_then(|config| get_git_mergetool_config(config, name))
+                .map(MergeTool::external)
+        });
+        let tool =
+            tool.unwrap_or_else(|| MergeTool::external(ExternalMergeTool::with_program(name)));
         Self::new_inner(name, tool, path_converter, conflict_marker_style)
     }
 

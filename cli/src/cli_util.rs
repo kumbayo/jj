@@ -30,6 +30,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::rc::Rc;
+use std::str;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::SystemTime;
@@ -1787,7 +1788,7 @@ to the current parents may contain changes from multiple commits.
         }
     }
 
-    /// Loads 3-way merge editor from the settings.
+    /// Loads 3-way merge editor from Jujutsu settings or Git configuration.
     ///
     /// If the `tool_name` isn't specified, the default editor will be returned.
     pub fn merge_editor(
@@ -1796,10 +1797,38 @@ to the current parents may contain changes from multiple commits.
         tool_name: Option<&str>,
     ) -> Result<MergeEditor, MergeToolConfigError> {
         let conflict_marker_style = self.env.conflict_marker_style();
+        let git_config = jj_lib::git::get_git_backend(self.repo().store())
+            .ok()
+            .map(|git_backend| git_backend.git_repo().config_snapshot().clone());
         if let Some(name) = tool_name {
-            MergeEditor::with_name(
+            MergeEditor::with_name_and_git_config(
                 name,
                 self.settings(),
+                git_config.as_ref(),
+                self.path_converter().clone(),
+                conflict_marker_style,
+            )
+        } else if self
+            .settings()
+            .get_value("ui.merge-editor")
+            .optional()?
+            .is_some()
+        {
+            MergeEditor::from_settings(
+                ui,
+                self.settings(),
+                self.path_converter().clone(),
+                conflict_marker_style,
+            )
+        } else if let Some(name) = git_config
+            .as_ref()
+            .and_then(|config| config.string("merge.tool"))
+            .and_then(|name| str::from_utf8(&name).ok().map(ToOwned::to_owned))
+        {
+            MergeEditor::with_name_and_git_config(
+                &name,
+                self.settings(),
+                git_config.as_ref(),
                 self.path_converter().clone(),
                 conflict_marker_style,
             )
