@@ -152,9 +152,8 @@ struct UnfinishedTree {
 struct TreeRewriter<'visitor, V: TreeRewriteVisitor> {
     store: Arc<Store>,
     visitor: &'visitor V,
-    // Pending reads and writes. We use `PrioritizedFutures` only to limit the
-    // number of concurrent backend requests. We don't care about the order the
-    // work is done in, so the keys are just sequence numbers.
+    // Pending reads and writes.
+    // We limit the number of concurrent backend requests.
     work: LimitedFutures<'static, WorkItem<V::Context>>,
     scheduled_trees: HashSet<TreeKey<V::Context>>,
     // Map from original tree to the ID of the rewritten tree
