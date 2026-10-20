@@ -1,2 +1,4 @@
 [hints]
 resolving-conflicts = true
+message-prefix = true
+split-disclaimer = true

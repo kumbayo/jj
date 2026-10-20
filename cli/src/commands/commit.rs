@@ -156,7 +156,7 @@ new working-copy commit.
         let temp_commit = commit_builder.write_hidden().await?;
         let intro = "";
         let description = description_template(ui, &tx, intro, &temp_commit)?;
-        let description = edit_description(&text_editor, &description)?;
+        let description = edit_description(&tx, &text_editor, &description)?;
         if description.is_empty() {
             writedoc!(
                 ui.hint_default(),

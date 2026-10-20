@@ -179,7 +179,7 @@ pub(crate) async fn cmd_describe(
 
         if let [(_, intro, temp_commit)] = &*temp_commits {
             let template = description_template(ui, &tx, intro, temp_commit)?;
-            let description = edit_description(&text_editor, &template)?;
+            let description = edit_description(&tx, &text_editor, &template)?;
             commit_builders[0].set_description(description);
         } else {
             let descriptions = edit_multiple_descriptions(ui, &text_editor, &tx, &temp_commits)?

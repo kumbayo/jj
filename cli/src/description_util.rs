@@ -190,10 +190,20 @@ fn skip_leading_comment_lines(text: &str) -> LineNumber {
     LineNumber::new(u32::try_from(n).unwrap() + 1).unwrap()
 }
 
-pub fn edit_description(editor: &TextEditor, description: &str) -> Result<String, CommandError> {
+pub fn edit_description(
+    tx: &WorkspaceCommandTransaction,
+    editor: &TextEditor,
+    description: &str,
+) -> Result<String, CommandError> {
     let mut description = description.to_owned();
     append_blank_line(&mut description);
-    description.push_str("JJ: Lines starting with \"JJ:\" (like this one) will be removed.\n");
+    if tx
+        .base_workspace_helper()
+        .settings()
+        .get_bool("hints.message-prefix")?
+    {
+        description.push_str("JJ: Lines starting with \"JJ:\" (like this one) will be removed.\n");
+    }
     let line_number = skip_leading_comment_lines(&description);
 
     let description = editor
@@ -213,13 +223,20 @@ pub fn edit_multiple_descriptions(
     let mut commits_map = IndexMap::new();
     let mut bulk_message = String::new();
 
-    bulk_message.push_str(indoc! {r#"
+    if tx
+        .base_workspace_helper()
+        .settings()
+        .get_bool("hints.split-disclaimer")?
+    {
+        bulk_message.push_str(indoc! {r#"
         JJ: Enter or edit commit descriptions after the `JJ: describe` lines.
         JJ: Warning:
         JJ: - The text you enter will be lost on a syntax error.
         JJ: - The syntax of the separator lines may change in the future.
         JJ:
     "#});
+    }
+
     for (commit_id, intro, temp_commit) in commits {
         let commit_hash = short_commit_hash(commit_id);
         bulk_message.push_str("JJ: describe ");
@@ -230,7 +247,13 @@ pub fn edit_multiple_descriptions(
         bulk_message.push_str(&template);
         append_blank_line(&mut bulk_message);
     }
-    bulk_message.push_str("JJ: Lines starting with \"JJ:\" (like this one) will be removed.\n");
+    if tx
+        .base_workspace_helper()
+        .settings()
+        .get_bool("hints.message-prefix")?
+    {
+        bulk_message.push_str("JJ: Lines starting with \"JJ:\" (like this one) will be removed.\n");
+    }
     let line_number = skip_leading_comment_lines(&bulk_message);
 
     let bulk_message = editor

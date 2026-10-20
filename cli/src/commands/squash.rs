@@ -374,7 +374,7 @@ pub(crate) async fn cmd_squash(
                     let temp_commit = commit_builder.write_hidden().await?;
                     let intro = "";
                     let template = description_template(ui, &tx, intro, &temp_commit)?;
-                    edit_description(&text_editor, &template)?
+                    edit_description(&tx, &text_editor, &template)?
                 } else {
                     description_with_trailers
                 }
@@ -395,7 +395,7 @@ pub(crate) async fn cmd_squash(
             let temp_commit = commit_builder.write_hidden().await?;
             let intro = "Enter a description for the combined commit.";
             let template = description_template(ui, &tx, intro, &temp_commit)?;
-            edit_description(&text_editor, &template)?
+            edit_description(&tx, &text_editor, &template)?
         };
         commit_builder.set_description(description);
         if insert_destination_commit {
